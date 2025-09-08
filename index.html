@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>3C Store Fixtures — Delivery Dodge</title>
+<style>
+  :root{
+    --bg:#0d1326;--fg:#e8f2ff;--accent:#d64b63;--muted:#93a3b8;--good:#34d399;--bad:#f43f5e
+  }
+  html,body{height:100%;margin:0;background:radial-gradient(1600px 800px at 50% -10%,#172043,var(--bg));color:var(--fg);font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif}
+  .wrap{display:grid;grid-template-rows:auto 1fr auto;min-height:100%}
+  header,footer{display:flex;justify-content:space-between;align-items:center;padding:10px 14px}
+  header{gap:.75rem;border-bottom:1px solid rgba(255,255,255,.08)}
+  footer{gap:1rem;border-top:1px solid rgba(255,255,255,.08);font-size:.95rem;color:var(--muted)}
+  .pill{background:rgba(255,255,255,.08);padding:8px 10px;border-radius:999px}
+  .btn{background:var(--accent);color:white;border:none;border-radius:999px;padding:10px 14px;font-weight:600;cursor:pointer}
+  .btn:active{transform:translateY(1px)}
+  canvas{width:min(100vw,1000px);height:auto;max-height:72vh;display:block;margin:0 auto;touch-action:none}
+
+  /* Modal */
+  .modal{position:fixed;inset:0;background:rgba(5,8,20,.65);display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
+  .modal.show{display:flex}
+  .card{background:#0f1530;border:1px solid rgba(255,255,255,.12);border-radius:18px;box-shadow:0 18px 60px rgba(0,0,0,.45);max-width:560px;width:100%;padding:22px}
+  .card h2{margin:.2rem 0 .6rem;font-size:1.35rem;color:#cfe3ff}
+  .card p{color:#cbd6ea;margin:.25rem 0 .6rem;line-height:1.45}
+  .row{display:flex;gap:12px;flex-wrap:wrap;margin:.2rem 0}
+  .cell{flex:1 1 140px;background:rgba(255,255,255,.06);border-radius:12px;padding:10px}
+  .cell b{display:block;color:#fff}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="pill">🏁 Distance: <span id="dist">0</span> m</div>
+    <div class="pill">🔥 Streak: <span id="streak">0</span></div>
+    <div class="pill">❤️ Lives: <span id="lives">3</span></div>
+    <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
+      <button id="help" class="btn">How to Play</button>
+      <button id="restart" class="btn">Restart</button>
+    </div>
+  </header>
+
+  <main>
+    <canvas id="game" width="1000" height="560" aria-label="3C Truck Obstacle Dodge"></canvas>
+  </main>
+
+  <footer>
+    <div class="pill">Controls: ←/→ or A/D • Mobile: drag/tap lanes • Avoid cones, barrels & barricades • Grab green boosts!</div>
+    <div>3C STORE FIXTURES — obstacle dodging arcade</div>
+  </footer>
+</div>
+
+<!-- Start / Help -->
+<div id="startModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="startTitle">
+  <div class="card">
+    <h2 id="startTitle">How to Play</h2>
+    <p>Drive the 3C truck, <b>switch lanes</b>, and <b>dodge obstacles</b> to go as far as you can.</p>
+    <ul style="margin:.2rem 0 .6rem 1.2rem;line-height:1.5">
+      <li><b>Move:</b> ←/→ or A/D (desktop); drag/tap lanes (mobile)</li>
+      <li><b>Goal:</b> Avoid cones, barrels, barricades. Collect green boosts!</li>
+      <li><b>Score:</b> Distance increases over time; streak grows with clean dodges</li>
+      <li><b>Lives:</b> You have 3. Collide and you lose one.</li>
+    </ul>
+    <div class="row">
+      <div class="cell"><b>Tip</b><span>Longer runs = faster speed</span></div>
+      <div class="cell"><b>Bonus</b><span>Boost shows +10 pts & green glow</span></div>
+      <div class="cell"><b>Brake</b><span>Hold Space to slow briefly</span></div>
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button id="startBtn" class="btn">Start</button>
+    </div>
+  </div>
+</div>
+
+<!-- Game Over -->
+<div id="overModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="overTitle">
+  <div class="card">
+    <h2 id="overTitle">Game Over</h2>
+    <div class="row">
+      <div class="cell"><b>Distance</b><span id="overDist">0 m</span></div>
+      <div class="cell"><b>Best Distance</b><span id="overBest">0 m</span></div>
+      <div class="cell"><b>Max Streak</b><span id="overStreak">0</span></div>
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button id="again" class="btn">Play Again</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const c = canvas.getContext('2d');
+
+  // UI
+  const distEl = document.getElementById('dist');
+  const streakEl = document.getElementById('streak');
+  const livesEl = document.getElementById('lives');
+  const restartBtn = document.getElementById('restart');
+  const helpBtn = document.getElementById('help');
+
+  // Modals
+  const startModal = document.getElementById('startModal');
+  const overModal = document.getElementById('overModal');
+  const startBtn = document.getElementById('startBtn');
+  const againBtn = document.getElementById('again');
+  const overDist = document.getElementById('overDist');
+  const overBest = document.getElementById('overBest');
+  const overStreak = document.getElementById('overStreak');
+
+  // World
+  const W = canvas.width, H = canvas.height;
+  const groundY = H - 80;
+  const roadTop = groundY - 140;
+  const roadBottom = groundY + 40;
+  const lanes = 3;
+  const laneXs = [];
+  for (let i=0;i<lanes;i++){
+    laneXs.push(200 + i * 220); // 200, 420, 640
+  }
+
+  // Truck geometry
+  const TRUCK = {w: 180, h: 90};
+  let truck = {
+    lane: 1, x: laneXs[1]-TRUCK.w/2, y: groundY-TRUCK.h-14,
+    vx: 0, targetLane: 1
+  };
+
+  // Game state
+  let running = false, paused = false, over = false;
+  let distance = 0, bestDistance = 0, speed = 240;
+  let maxSpeed = 520;
+  let streak = 0, maxStreak = 0;
+  let lives = 3;
+  let brake = false;
+  let last = performance.now();
+
+  // Obstacles & pickups
+  const objs = [];
+  const OBST = { w: 70, h: 70 };
+  const PICK = { w: 64, h: 64 };
+
+  // Floating reward texts
+  const floatTexts = [];
+
+  // Boost glow timer (ms)
+  let truckGlow = 0;
+
+  function resetGame(){
+    distance = 0; streak = 0; maxStreak = 0; speed = 240; lives = 3;
+    truck.lane = 1; truck.targetLane = 1; truck.x = laneXs[1]-TRUCK.w/2;
+    objs.length = 0; over = false; running = true; paused = false;
+    floatTexts.length = 0; truckGlow = 0;
+    updateHUD();
+  }
+
+  function updateHUD(){
+    distEl.textContent = Math.floor(distance).toString();
+    streakEl.textContent = streak.toString();
+    livesEl.textContent = lives.toString();
+  }
+
+  function showStart(){ startModal.classList.add('show'); }
+  function hideStart(){ startModal.classList.remove('show'); }
+  function showOver(){ overModal.classList.add('show'); }
+  function hideOver(){ overModal.classList.remove('show'); }
+
+  // Drawing helpers
+  function roundRect(ctx, x, y, w, h, r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+  }
+
+  function drawBackground(){
+    // Sky
+    const sky = c.createLinearGradient(0,0,0,H);
+    sky.addColorStop(0,'#7ec8ff'); sky.addColorStop(.6,'#bfe3ff'); sky.addColorStop(1,'#eaf6ff');
+    c.fillStyle = sky; c.fillRect(0,0,W,H);
+
+    // Clouds
+    c.fillStyle = 'rgba(255,255,255,.9)';
+    const cloud=(x,y,s)=>{c.beginPath();c.ellipse(x,y,50*s,30*s,0,0,Math.PI*2);
+      c.ellipse(x+40*s,y+5*s,40*s,25*s,0,0,Math.PI*2);
+      c.ellipse(x-40*s,y+10*s,40*s,25*s,0,0,Math.PI*2); c.fill();};
+    cloud(140,90,1.0); cloud(380,70,1.2); cloud(760,110,1.1);
+
+    // Hills
+    const hills = c.createLinearGradient(0, roadTop-120, 0, groundY-20);
+    hills.addColorStop(0,'#4d6b4d'); hills.addColorStop(1,'#3a5a3a');
+    c.fillStyle = hills; c.beginPath();
+    c.moveTo(0, roadTop);
+    c.bezierCurveTo(220,roadTop-100, 480,roadTop-60, 700,roadTop-100);
+    c.bezierCurveTo(860,roadTop-140, 920,roadTop-40, W,roadTop-80);
+    c.lineTo(W,groundY-20); c.lineTo(0,groundY-20); c.closePath(); c.fill();
+
+    // Road
+    c.fillStyle = '#505563'; c.fillRect(0, roadTop, W, roadBottom-roadTop);
+
+    // Road motion stripes
+    c.fillStyle = 'rgba(255,255,255,.2)';
+    const stripeW=80,stripeH=8, gap=90;
+    const offs = (performance.now()/8)% (stripeW+gap);
+    for(let x=-offs; x<W; x+=stripeW+gap) c.fillRect(x, groundY+6, stripeW, stripeH);
+  }
+
+  function drawTruck(glow=false){
+    const x = truck.x, y = truck.y;
+
+    if (glow){
+      c.save();
+      c.globalCompositeOperation = 'lighter';
+      c.shadowColor = '#00ff88';
+      c.shadowBlur = 24;
+      // Draw a soft glow using trailer rectangle size
+      roundRect(c, x-6, y-6, TRUCK.w+12, TRUCK.h+12, 16);
+      c.fillStyle = 'rgba(0,255,140,0.25)';
+      c.fill();
+      c.restore();
+    }
+
+    // Trailer
+    c.save();
+    roundRect(c, x+60, y-10, 120, 70, 10);
+    c.fillStyle = '#f7f8fb'; c.fill(); c.lineWidth = 3; c.strokeStyle = '#bcc7d6'; c.stroke();
+
+    // Branding (two lines)
+    c.fillStyle = '#6d7a8c'; c.font = 'bold 14px Inter, Arial';
+    c.fillText('3C STORE', x+70, y+6);
+    c.fillText('FIXTURES', x+70, y+22);
+    c.fillStyle = '#d64b63'; c.fillRect(x+156, y-6, 20, 20);
+    c.fillStyle = '#fff'; c.font = 'bold 14px Inter, Arial'; c.fillText('3C', x+159, y+10);
+
+    // Cab
+    roundRect(c, x, y, 70, TRUCK.h, 12); c.fillStyle='#ffffff'; c.fill(); c.strokeStyle='#bcc7d6'; c.lineWidth=3; c.stroke();
+    // Windshield
+    c.fillStyle='#1b2635'; c.beginPath();
+    c.moveTo(x+12, y+16); c.lineTo(x+58, y+16); c.lineTo(x+58, y+44); c.lineTo(x+30, y+44); c.closePath(); c.fill();
+    // Accent
+    c.fillStyle = '#d64b63'; c.beginPath();
+    c.moveTo(x, y+52); c.lineTo(x+34, y+52); c.lineTo(x+58, y+TRUCK.h); c.lineTo(x, y+TRUCK.h); c.closePath(); c.fill();
+
+    // Wheels
+    function wheel(wx, wy){ c.beginPath(); c.arc(wx, wy, 12, 0, Math.PI*2); c.fillStyle='#1c2230'; c.fill();
+      c.beginPath(); c.arc(wx, wy, 6, 0, Math.PI*2); c.fillStyle='#c4ccd8'; c.fill(); }
+    wheel(x+20, y+TRUCK.h); wheel(x+54, y+TRUCK.h);
+    wheel(x+92, y+TRUCK.h); wheel(x+132, y+TRUCK.h);
+    c.restore();
+  }
+
+  function drawObstacle(o){
+    c.save(); c.translate(o.x, o.y);
+    if (o.type === 'cone'){ // orange cone
+      c.fillStyle = '#ff7a00';
+      c.beginPath(); c.moveTo(0,OBST.h); c.lineTo(OBST.w/2,0); c.lineTo(OBST.w,OBST.h); c.closePath(); c.fill();
+      c.fillStyle='#fff'; c.fillRect(OBST.w*0.18, OBST.h*0.55, OBST.w*0.64, 8);
+      c.fillRect(OBST.w*0.25, OBST.h*0.75, OBST.w*0.5, 8);
+    } else if (o.type === 'barrel'){ // red barrel
+      c.fillStyle = '#b91c1c'; roundRect(c, 0, 8, OBST.w, OBST.h-16, 10); c.fill();
+      c.fillStyle='#eee'; c.fillRect(4, 18, OBST.w-8, 6); c.fillRect(4, OBST.h-24, OBST.w-8, 6);
+    } else if (o.type === 'barricade'){ // striped barricade
+      roundRect(c, 0, 20, OBST.w, OBST.h-26, 8); c.fillStyle='#222830'; c.fill();
+      for(let i=0;i<6;i++){ c.fillStyle = (i%2? '#ff6b6b':'#ffd166'); c.fillRect(6+i*11, 28, 10, OBST.h-40); }
+    } else if (o.type === 'boost'){ // green pick-up (good)
+      roundRect(c, 0, 12, PICK.w, PICK.h-24, 12); c.fillStyle='#16a34a'; c.fill();
+      c.fillStyle='#a7f3d0'; c.fillRect(10, PICK.h/2-6, PICK.w-20, 12);
+      c.strokeStyle='#064e3b'; c.strokeRect(6, 16, PICK.w-12, PICK.h-32);
+    }
+    c.restore();
+  }
+
+  function spawnObstacle(){
+    const lane = Math.floor(Math.random()*lanes);
+    const isBoost = Math.random() < 0.18;
+    const type = isBoost ? 'boost' : (Math.random()<0.5 ? 'cone' : (Math.random()<0.7?'barrel':'barricade'));
+    const w = isBoost? PICK.w : OBST.w;
+    const h = isBoost? PICK.h : OBST.h;
+    objs.push({
+      kind: isBoost? 'pick':'obst',
+      type, lane,
+      x: laneXs[lane]-w/2,
+      y: roadTop - h - 10,
+      w, h,
+      passed:false
+    });
+  }
+
+  let spawnTimer = 0;
+
+  function rectOverlap(ax,ay,aw,ah, bx,by,bw,bh){
+    return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+  }
+
+  // Screen shake & flash feedback (red flash only for collisions)
+  let shakeTime=0, flashTime=0, flashColor='#000';
+  function shake(ms){ shakeTime = ms; }
+  function flash(color, ms){ flashColor=color; flashTime = ms; }
+
+  function update(dt){
+    if (!running || paused || over) return;
+
+    // Increase speed slowly (cap at max)
+    speed += 4*dt; if (speed > maxSpeed) speed = maxSpeed;
+
+    // Brake (Space)
+    const effectiveSpeed = brake ? speed*0.55 : speed;
+
+    distance += effectiveSpeed * dt * 0.25; // tune meters
+    updateHUD();
+
+    // Spawn logic (faster at high speed)
+    spawnTimer -= dt;
+    const interval = Math.max(0.65, 1.4 - speed/600);
+    if (spawnTimer <= 0){
+      spawnTimer = interval;
+      spawnObstacle();
+    }
+
+    // Move objects down
+    for (let i=objs.length-1;i>=0;i--){
+      const o = objs[i];
+      o.y += effectiveSpeed * dt;
+
+      // Count passed safely for streak
+      if (!o.passed && o.y > truck.y + TRUCK.h){
+        o.passed = true;
+        if (o.kind === 'obst'){ streak++; if (streak>maxStreak) maxStreak=streak; }
+      }
+
+      // Collision
+      if (rectOverlap(truck.x, truck.y, TRUCK.w, TRUCK.h, o.x, o.y, o.w, o.h)){
+        if (o.kind === 'pick'){
+          // Boost collected — no green flash; show floating text + glow
+          objs.splice(i,1);
+          streak += 2; 
+          distance += 10; 
+          speed = Math.min(speed + 40, maxSpeed);
+
+          floatTexts.push({
+            text: "+10 pts!",
+            x: truck.x + TRUCK.w/2,
+            y: truck.y - 10,
+            life: 1000 // ms
+          });
+          truckGlow = 300; // ms of green glow
+          continue;
+        } else {
+          // Hit obstacle
+          objs.splice(i,1);
+          lives--; streak = 0;
+          shake(180);
+          flash('#610', 120); // red-ish damage flash
+          if (lives <= 0){
+            running = false; over = true;
+            bestDistance = Math.max(bestDistance, Math.floor(distance));
+            overDist.textContent = Math.floor(distance)+' m';
+            overBest.textContent = bestDistance+' m';
+            overStreak.textContent = maxStreak.toString();
+            setTimeout(()=>showOver(), 250);
+          }
+          updateHUD();
+        }
+      }
+
+      // Cleanup offscreen
+      if (o.y > H + 120) objs.splice(i,1);
+    }
+
+    // Smooth lane move
+    const targetX = laneXs[truck.targetLane] - TRUCK.w/2;
+    const dx = targetX - truck.x;
+    truck.x += Math.sign(dx) * Math.min(Math.abs(dx), 520*dt);
+
+    // Floating texts update
+    for (let i=floatTexts.length-1; i>=0; i--){
+      const t = floatTexts[i];
+      t.y -= 40 * dt;      // rise up
+      t.life -= dt * 1000; // fade timer
+      if (t.life <= 0) floatTexts.splice(i,1);
+    }
+
+    // Truck glow timer
+    if (truckGlow > 0) truckGlow -= dt*1000;
+  }
+
+  function render(){
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - last)/1000);
+    last = now;
+
+    update(dt);
+
+    // Shake offset
+    let sx=0, sy=0;
+    if (shakeTime>0){
+      shakeTime -= dt*1000;
+      const p = Math.max(0, shakeTime/1000);
+      sx = (Math.random()-.5)*12*p; sy = (Math.random()-.5)*12*p;
+    }
+
+    c.save(); c.translate(sx, sy);
+    drawBackground();
+
+    // Objects
+    for (const o of objs) drawObstacle(o);
+
+    // Truck (with optional glow if truckGlow > 0)
+    drawTruck(truckGlow > 0);
+
+    // Floating texts
+    c.save();
+    c.font = "bold 24px Inter, Arial";
+    c.textAlign = "center";
+    for (const t of floatTexts){
+      const alpha = Math.max(0, Math.min(1, t.life / 1000));
+      c.fillStyle = `rgba(50, 205, 50, ${alpha})`; // limegreen w/ fade
+      c.fillText(t.text, t.x, t.y);
+    }
+    c.restore();
+
+    c.restore();
+
+    // Red damage flash overlay
+    if (flashTime>0){
+      flashTime -= dt*1000;
+      c.fillStyle = flashColor;
+      c.globalAlpha = Math.max(0, flashTime/200);
+      c.fillRect(0,0,W,H);
+      c.globalAlpha = 1;
+    }
+
+    requestAnimationFrame(render);
+  }
+
+  // Input
+  function goLane(delta){
+    if (!running || over) return;
+    truck.targetLane = Math.max(0, Math.min(lanes-1, truck.targetLane + delta));
+  }
+
+  window.addEventListener('keydown', (e)=>{
+    if (e.code==='ArrowLeft' || e.code==='KeyA'){ e.preventDefault(); goLane(-1); }
+    if (e.code==='ArrowRight'|| e.code==='KeyD'){ e.preventDefault(); goLane(1); }
+    if (e.code==='Space'){ e.preventDefault(); brake = true; }
+    if (e.code==='KeyP'){ paused = !paused; }
+    if (e.code==='Enter' && over){ hideOver(); resetGame(); }
+  });
+  window.addEventListener('keyup', (e)=>{ if (e.code==='Space') brake=false; });
+
+  // Touch / mouse lane targeting
+  let pointerDown=false;
+  function laneFromClientX(clientX){
+    const rect = canvas.getBoundingClientRect();
+    const x = (clientX - rect.left) * (W / rect.width);
+    let bestI=0, bestD=1e9;
+    for(let i=0;i<lanes;i++){
+      const d = Math.abs(x - laneXs[i]);
+      if (d<bestD){bestD=d; bestI=i;}
+    }
+    return bestI;
+  }
+  canvas.addEventListener('pointerdown',e=>{ pointerDown=true; truck.targetLane = laneFromClientX(e.clientX); });
+  window.addEventListener('pointermove',e=>{ if(pointerDown) truck.targetLane = laneFromClientX(e.clientX); });
+  window.addEventListener('pointerup',()=>{ pointerDown=false; });
+
+  // Buttons & modals
+  restartBtn.addEventListener('click', ()=>{ hideOver(); resetGame(); });
+  helpBtn.addEventListener('click', ()=>{ running=false; paused=true; showStart(); });
+  startBtn.addEventListener('click', ()=>{ hideStart(); paused=false; running=true; });
+  againBtn.addEventListener('click', ()=>{ hideOver(); resetGame(); });
+
+  // Boot
+  showStart();
+  render();
+})();
+</script>
+</body>
+</html>
