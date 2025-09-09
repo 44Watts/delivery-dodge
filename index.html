@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>3C Store Fixtures — Lane Dodge</title>
+<title>3C Store Fixtures - Delivery Dodge</title>
 <style>
   :root{
     --bg:#0d1326;--fg:#e8f2ff;--accent:#d64b63;--muted:#93a3b8;--good:#34d399
@@ -18,7 +18,6 @@
   .btn:active{transform:translateY(1px)}
   canvas{width:min(100vw,1100px);height:auto;max-height:74vh;display:block;margin:0 auto;touch-action:none}
 
-  /* Modal */
   .modal{position:fixed;inset:0;background:rgba(5,8,20,.65);display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
   .modal.show{display:flex}
   .card{background:#0f1530;border:1px solid rgba(255,255,255,.12);border-radius:18px;box-shadow:0 18px 60px rgba(0,0,0,.45);max-width:620px;width:100%;padding:22px}
@@ -46,7 +45,7 @@
   </main>
 
   <footer>
-    <div class="pill">Controls: ↑/↓ or W/S • Mobile: tap top/bottom • Avoid cones/barricades/cats • Grab green »» speed boosts</div>
+    <div class="pill">Controls: ↑/↓ or W/S • Mobile: tap top/bottom • Avoid cones/barricades/cats • Grab green »» boosts</div>
     <div>3C STORE FIXTURES — lane dodging arcade</div>
   </footer>
 </div>
@@ -55,12 +54,11 @@
 <div id="startModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="startTitle">
   <div class="card">
     <h2 id="startTitle">How to Play</h2>
-    <p>There are <b>3 lanes</b>. Hazards come from the <b>right</b>. Use <b>Up/Down</b> (or W/S) to switch lanes and avoid them.</p>
+    <p>There are <b>3 lanes</b>. Obstacles come from the right. Use <b>Up/Down</b> (or W/S) to switch lanes and avoid them. Boosts give points & a little speed.</p>
     <ul style="margin:.2rem 0 .6rem 1.2rem;line-height:1.5">
-      <li><b>Move:</b> ↑/↓ or W/S (desktop); tap top/bottom (mobile)</li>
-      <li><b>Goal:</b> Dodge cones, barricades, and <b>cats</b></li>
-      <li><b>Boost:</b> Grab green <b>»»</b> to gain speed & points</li>
-      <li><b>Fairness:</b> Guaranteed open lane + reaction time + staggered waves</li>
+      <li><b>Fairness:</b> One obstacle per wave + always a safe lane + reaction-safe spawns</li>
+      <li><b>Grace:</b> 180ms invulnerability right after you switch lanes</li>
+      <li><b>Goal:</b> Go far without losing all 3 lives</li>
     </ul>
     <div class="row" style="justify-content:flex-end">
       <button id="startBtn" class="btn">Start</button>
@@ -88,6 +86,12 @@
   const canvas = document.getElementById('game');
   const c = canvas.getContext('2d');
 
+  // === Load the TRUCK IMAGE (1112x358) ===
+  const truckImg = new Image();
+  truckImg.src = 'truck.png'; // must be in the same folder as this HTML
+  let truckImgReady = false;
+  truckImg.onload = () => truckImgReady = true;
+
   // UI
   const distEl = document.getElementById('dist');
   const streakEl = document.getElementById('streak');
@@ -104,36 +108,41 @@
   const overBest = document.getElementById('overBest');
   const overStreak = document.getElementById('overStreak');
 
-  // ======= WORLD / TUNING =======
+  // ======= TUNING =======
   const W = canvas.width, H = canvas.height;
-  const roadTop = 100;
-  const roadBottom = H - 70;
+  const roadTop = 80;
+  const roadBottom = H - 60;
   const lanes = 3;
 
-  // Speed curve (gentler)
-  const BASE_SPEED = 220;
-  const MAX_SPEED  = 360;  // lower top speed
-  const SPEED_GAIN = 2.6;  // slower acceleration
+  // Gentler speed = more time to react
+  const BASE_SPEED = 180;
+  const MAX_SPEED  = 280;
+  const SPEED_GAIN = 1.8;
 
-  // Truck geometry (SLIM) + forgiving hitbox
-  const TRUCK = { w: 170, h: 60 };
-  const TRUCK_X = 150;
-  const HITBOX_PAD = 24;
+  // Truck (size) + forgiving hitbox
+  const TRUCK = { w: 140, h: 50 };
+  const TRUCK_X = 140;
+  const HITBOX_PAD = 30;
 
-  // Lane-change responsiveness (set to 99999 for instant snap)
+  // Fast glide lane change (keeps your preferred feel)
   const LANE_CHANGE_SPEED = 1800; // px/s
 
-  // Obstacles & pickups
-  const OBST = { w: 48, h: 48 }; // slimmer for more gaps
-  const PICK = { w: 58, h: 42 };
+  // Obstacles & boosts (smaller)
+  const OBST = { w: 32, h: 30 };
+  const PICK = { w: 44, h: 28 };
 
-  // Spawning safety rules
-  const DESIRED_GAP_PX = 300; // per-lane spacing
-  const BOOST_CHANCE   = 0.20;
-  const REACTION_TIME_S = 0.80; // must have at least this much time to react
-  const EXTRA_BUFFER_PX = 180;  // fudge factor beyond physics
-  const STAGGER_PX      = 100;  // offset within multi-lane waves
-  const WINDOW_AHEAD_PX = 260;  // "danger window" ahead of truck to avoid walls
+  // Spawning / fairness
+  const DESIRED_GAP_PX = 500;  // bigger same-lane spacing
+  const BOOST_CHANCE   = 0.18; // fewer boosts, mostly obstacles
+  const REACTION_TIME_S = 0.95; // base reaction time
+  const EXTRA_BUFFER_PX = 240;  // extra cushion
+  const WINDOW_AHEAD_PX = 320;  // min clear window
+  const GAP_FACTOR      = 1.5;  // keep ≥ 1.5× truck width clear
+  const STAGGER_PX      = 140;  // (we spawn 1 lane per wave, but keep for safety)
+
+  // Global limits (prevents clutter)
+  const MAX_OBJS_ON_SCREEN = 7;    // total (obstacles + boosts)
+  const MAX_OBST_PER_LANE  = 3;    // avoid lane spam
 
   // Lane centers
   const laneYs = [];
@@ -156,6 +165,10 @@
   const laneCooldown = Array(lanes).fill(0); // seconds remaining per lane
   let truckGlow = 0;
 
+  // Short grace after lane change
+  const INVULN_MS = 180;
+  let invulnMs = 0;
+
   // Truck state
   let truck = { y: laneYs[1] - TRUCK.h/2, targetLane: 1 };
 
@@ -163,7 +176,7 @@
     distance = 0; streak = 0; maxStreak = 0; speed = BASE_SPEED; lives = 3;
     objs.length = 0; floatTexts.length = 0; laneCooldown.fill(0);
     truck.targetLane = 1; truck.y = laneYs[1] - TRUCK.h/2;
-    over = false; running = true; paused = false; truckGlow = 0;
+    over = false; running = true; paused = false; truckGlow = 0; invulnMs = 0;
     updateHUD();
   }
 
@@ -188,7 +201,6 @@
     ctx.arcTo(x,y,x+w,y,r);
     ctx.closePath();
   }
-
   function shuffle(arr){
     for (let i = arr.length - 1; i > 0; i--){
       const j = Math.floor(Math.random() * (i + 1));
@@ -197,17 +209,46 @@
     return arr;
   }
 
-  function laneBlockedInWindow(lane, xStart, xEnd){
-    return objs.some(o =>
-      o.kind === 'obst' &&
-      o.lane === lane &&
-      (o.x < xEnd) && (o.x + o.w > xStart)
-    );
+  // Interval helpers for fairness window
+  function laneIntervalsInWindow(lane, xStart, xEnd){
+    const segs = [];
+    for (const o of objs){
+      if (o.kind !== 'obst' || o.lane !== lane) continue;
+      const a = o.x, b = o.x + o.w;
+      if (b <= xStart || a >= xEnd) continue;
+      segs.push([Math.max(a,xStart), Math.min(b,xEnd)]);
+    }
+    segs.sort((p,q)=>p[0]-q[0]);
+    const merged = [];
+    for (const s of segs){
+      if (!merged.length || s[0] > merged[merged.length-1][1] + 0.001){
+        merged.push([s[0], s[1]]);
+      } else {
+        merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], s[1]);
+      }
+    }
+    return merged;
   }
-
-  function safeSpawnX(vxAbs){
-    // time to reach truck = (x - TRUCK_X) / vxAbs  >= REACTION_TIME_S
-    const minX = TRUCK_X + vxAbs * REACTION_TIME_S + EXTRA_BUFFER_PX;
+  function laneHasGapLen(lane, xStart, gapLen){
+    const xEnd = xStart + gapLen;
+    const blocks = laneIntervalsInWindow(lane, xStart, xEnd);
+    let cursor = xStart;
+    for (const [a,b] of blocks){
+      if (a > cursor) return true;
+      cursor = Math.max(cursor, b);
+    }
+    return cursor < xEnd;
+  }
+  function laneBlockedInWindow(lane, xStart, xEnd){
+    return laneIntervalsInWindow(lane, xStart, xEnd).length > 0;
+  }
+  function timeToReachLane(targetLaneIndex){
+    const targetY = laneYs[targetLaneIndex] - TRUCK.h/2;
+    const dy = Math.abs(targetY - truck.y);
+    return dy / Math.max(1, LANE_CHANGE_SPEED); // seconds
+  }
+  function safeSpawnX(vxAbs, requiredReactS){
+    const minX = TRUCK_X + vxAbs * requiredReactS + EXTRA_BUFFER_PX;
     return Math.max(W + 30, minX);
   }
 
@@ -241,64 +282,28 @@
     c.fillRect(0, roadBottom, W, 8);
   }
 
-  // 10-wheeler cargo truck (right-facing) — SLIM drawing
-  function drawTruck10(x, yTop, withGlow=false){
-    const y = yTop;
-
+  // === NEW: Draw truck using the loaded PNG ===
+  function drawTruckImage(x, y, withGlow=false){
     if (withGlow){
       c.save();
       c.globalCompositeOperation = 'lighter';
       c.shadowColor = '#00ff88';
-      c.shadowBlur = 22;
-      roundRect(c, x-120, y-6, 200, TRUCK.h+12, 16);
+      c.shadowBlur = 18;
+      roundRect(c, x - 12, y - 6, TRUCK.w + 24, TRUCK.h + 12, 14);
       c.fillStyle = 'rgba(0,255,140,0.22)';
-      c.fill(); c.restore();
+      c.fill(); 
+      c.restore();
     }
-
-    // Trailer (shorter)
-    c.save();
-    roundRect(c, x-100, y+4, 120, TRUCK.h-8, 10);
-    c.fillStyle = '#f7f8fb'; c.fill(); c.lineWidth = 2.5; c.strokeStyle = '#bcc7d6'; c.stroke();
-
-    // Branding
-    c.fillStyle = '#6d7a8c'; c.font = 'bold 13px Inter, Arial';
-    c.fillText('3C STORE',  x-94, y+24);
-    c.fillText('FIXTURES',  x-94, y+40);
-    c.fillStyle = '#d64b63'; c.fillRect(x+12, y+6, 18, 18);
-    c.fillStyle = '#fff'; c.font = 'bold 12px Inter, Arial'; c.fillText('3C', x+15, y+20);
-
-    // Cab (narrower)
-    roundRect(c, x, y, 90, TRUCK.h, 12); c.fillStyle='#ffffff'; c.fill(); c.strokeStyle='#bcc7d6'; c.lineWidth=2.5; c.stroke();
-
-    // Grill / bumper / headlight
-    c.fillStyle = '#cfd6e0'; c.fillRect(x+78, y+12, 10, 20);
-    c.fillStyle = '#9aa7ba'; c.fillRect(x+84, y+15, 6, 14);
-    c.fillStyle = '#ffd27d'; c.fillRect(x+88, y+36, 8, 10);
-
-    // Windshield
-    c.fillStyle='#1b2635'; c.beginPath();
-    c.moveTo(x+16, y+14); c.lineTo(x+76, y+14); c.lineTo(x+76, y+40); c.lineTo(x+38, y+40); c.closePath(); c.fill();
-
-    // Door & handle
-
-
-    // Accent stripe
-    c.fillStyle = '#d64b63'; c.fillRect(x, y+52, 72, 12);
-
-    // 5 axles (10 wheels)
-    function dual(wx, wy){
-      c.beginPath(); c.arc(wx-6, wy, 10, 0, Math.PI*2); c.fillStyle='#1c2230'; c.fill();
-      c.beginPath(); c.arc(wx-6, wy, 5, 0, Math.PI*2); c.fillStyle='#c4ccd8'; c.fill();
-      c.beginPath(); c.arc(wx+6, wy, 10, 0, Math.PI*2); c.fillStyle='#1c2230'; c.fill();
-      c.beginPath(); c.arc(wx+6, wy, 5, 0, Math.PI*2); c.fillStyle='#c4ccd8'; c.fill();
+    if (truckImgReady){
+      // Draw scaled to TRUCK.w × TRUCK.h (keeps all your tuning consistent)
+      c.drawImage(truckImg, x, y, TRUCK.w, TRUCK.h);
+    } else {
+      // Fallback placeholder while loading
+      c.fillStyle = '#fff';
+      c.fillRect(x, y, TRUCK.w, TRUCK.h);
+      c.strokeStyle = '#8893a6';
+      c.strokeRect(x, y, TRUCK.w, TRUCK.h);
     }
-    const wy = y + TRUCK.h - 4;
-    dual(x+22,  wy);  // steer
-    dual(x+52,  wy);  // drive 1
-    dual(x+82,  wy);  // drive 2
-    dual(x-34,  wy);  // trailer 1
-    dual(x-62,  wy);  // trailer 2
-    c.restore();
   }
 
   function drawObstacle(o){
@@ -313,115 +318,124 @@
       if (o.type === 'cone'){
         c.fillStyle = '#ff7a00';
         c.beginPath(); c.moveTo(0,OBST.h); c.lineTo(OBST.w*0.5,0); c.lineTo(OBST.w,OBST.h); c.closePath(); c.fill();
-        c.fillStyle='#fff'; c.fillRect(OBST.w*0.2, OBST.h*0.55, OBST.w*0.6, 6);
-        c.fillRect(OBST.w*0.25, OBST.h*0.76, OBST.w*0.5, 6);
+        c.fillStyle='#fff'; c.fillRect(OBST.w*0.18, OBST.h*0.55, OBST.w*0.64, 5);
+        c.fillRect(OBST.w*0.25, OBST.h*0.76, OBST.w*0.5, 5);
       } else if (o.type === 'barricade'){
         roundRect(c, 0, 8, OBST.w, OBST.h-12, 8); c.fillStyle='#222830'; c.fill();
-        for(let i=0;i<6;i++){ c.fillStyle = (i%2 ? '#ff6b6b' : '#ffd166'); c.fillRect(6+i*9, 12, 8, OBST.h-24); }
+        for(let i=0;i<5;i++){ c.fillStyle = (i%2 ? '#ff6b6b' : '#ffd166'); c.fillRect(5+i*7, 12, 6, OBST.h-24); }
       } else if (o.type === 'cat'){
         const w=OBST.w, h=OBST.h;
         c.fillStyle = '#2b2b2b';
-        roundRect(c, 8, h*0.35, w-16, h*0.5, 10); c.fill();               // body
-        c.beginPath(); c.arc(18, h*0.35, 12, 0, Math.PI*2); c.fill();      // head
+        roundRect(c, 6, h*0.35, w-12, h*0.5, 8); c.fill();               // body
+        c.beginPath(); c.arc(16, h*0.35, 10, 0, Math.PI*2); c.fill();     // head
         // ears
-        c.beginPath(); c.moveTo(10, h*0.2); c.lineTo(14, h*0.1); c.lineTo(18, h*0.22); c.closePath(); c.fill();
-        c.beginPath(); c.moveTo(22, h*0.2); c.lineTo(26, h*0.1); c.lineTo(30, h*0.22); c.closePath(); c.fill();
+        c.beginPath(); c.moveTo(9, h*0.2); c.lineTo(12, h*0.1); c.lineTo(16, h*0.22); c.closePath(); c.fill();
+        c.beginPath(); c.moveTo(20, h*0.2); c.lineTo(23, h*0.1); c.lineTo(27, h*0.22); c.closePath(); c.fill();
         // tail
-        c.beginPath(); c.moveTo(w-10, h*0.55); c.quadraticCurveTo(w, h*0.3, w-6, h*0.25); c.lineWidth=6; c.strokeStyle='#2b2b2b'; c.stroke();
+        c.beginPath(); c.moveTo(w-8, h*0.55); c.quadraticCurveTo(w, h*0.3, w-5, h*0.25); c.lineWidth=5; c.strokeStyle='#2b2b2b'; c.stroke();
         // eye
-        c.fillStyle='#f6f6f6'; c.beginPath(); c.arc(22, h*0.34, 1.6, 0, Math.PI*2); c.fill();
+        c.fillStyle='#f6f6f6'; c.beginPath(); c.arc(20, h*0.34, 1.3, 0, Math.PI*2); c.fill();
       }
     }
     c.restore();
   }
 
-  // -------- Guaranteed-gap spawning with reaction-time & stagger --------
-  function spawnInLane(lane){
+  // -------- Spawning: ALWAYS fair, 1 lane per wave, guaranteed gap ----------
+  function spawnTick(dt){
+    // tick cooldowns
+    for (let i=0;i<lanes;i++) laneCooldown[i] = Math.max(0, laneCooldown[i] - dt);
+
+    // global cadence
+    const baseInterval = Math.max(0.7, 1.35 - speed/700);
+    spawnTimer -= dt;
+
+    if (spawnTimer > 0) return;
+
+    // Avoid clutter: cap total objects
+    if (objs.length >= MAX_OBJS_ON_SCREEN) {
+      spawnTimer = baseInterval * 0.8;
+      return;
+    }
+
+    // Open lanes (not on cooldown)
+    const open = [];
+    for (let i=0;i<lanes;i++) if (laneCooldown[i] <= 0) open.push(i);
+    if (open.length === 0){
+      spawnTimer = baseInterval * 0.9;
+      return;
+    }
+
+    // Count obstacles per lane to avoid lane spam
+    const laneCounts = Array(lanes).fill(0);
+    for (const o of objs) if (o.kind==='obst') laneCounts[o.lane]++;
+
+    // Determine “safe gap” lanes ahead
+    const xWindowStart = TRUCK_X + 40;
+    const requiredGap = Math.max(GAP_FACTOR * TRUCK.w, WINDOW_AHEAD_PX);
+    const gapLanes = [];
+    for (let i=0;i<lanes;i++){
+      if (laneCounts[i] < MAX_OBST_PER_LANE &&
+          laneHasGapLen(i, xWindowStart, requiredGap)) gapLanes.push(i);
+    }
+
+    // If no lane has a proper gap, skip this wave to preserve fairness
+    if (gapLanes.length === 0){
+      spawnTimer = baseInterval * 0.8;
+      return;
+    }
+
+    // Choose the EASIEST gap lane to reach (shortest glide time)
+    let bestLane = gapLanes[0], bestTime = Infinity;
+    for (const L of gapLanes){
+      const t = timeToReachLane(L);
+      if (t < bestTime){ bestTime = t; bestLane = L; }
+    }
+
+    // We only spawn in ONE other lane (never all 3 → never walls)
+    const spawnable = open.filter(l => l !== bestLane && laneCounts[l] < MAX_OBST_PER_LANE);
+    if (spawnable.length === 0){
+      spawnTimer = baseInterval * 0.9;
+      return;
+    }
+
+    // Reaction time for THIS wave = base + time to glide to safe lane + small margin
+    const WAVE_REACT_S = Math.max(REACTION_TIME_S, bestTime + 0.28);
+
+    // Pick a lane and spawn one object there (obstacle or occasional boost)
+    const lane = spawnable[Math.floor(Math.random()*spawnable.length)];
     const yCenter = laneYs[lane];
     const isBoost = Math.random() < BOOST_CHANCE;
 
     if (isBoost){
       const vxPick = speed * (Math.random()*0.15 + 0.95);
       objs.push({
-        kind: 'pick',
-        type: 'boost',
-        lane,
-        x: safeSpawnX(vxPick),
+        kind: 'pick', type: 'boost', lane,
+        x: safeSpawnX(vxPick, WAVE_REACT_S),
         y: yCenter - PICK.h/2,
         w: PICK.w, h: PICK.h,
-        vx: -vxPick,
-        passed: false
+        vx: -vxPick, passed:false
       });
     } else {
       const roll = Math.random();
       const type = roll < 0.33 ? 'barricade' : (roll < 0.66 ? 'cat' : 'cone');
       const vxObst = speed * (Math.random()*0.2 + 0.9);
       objs.push({
-        kind: 'obst',
-        type,
-        lane,
-        x: safeSpawnX(vxObst),
+        kind:'obst', type, lane,
+        x: safeSpawnX(vxObst, WAVE_REACT_S),
         y: yCenter - OBST.h/2,
         w: OBST.w, h: OBST.h,
-        vx: -vxObst,
-        passed: false
+        vx: -vxObst, passed:false
       });
     }
 
-    // lane cooldown from pixel gap
+    // Cooldown for that lane based on pixel gap
     const pxPerSec = Math.max(160, speed);
-    laneCooldown[lane] = DESIRED_GAP_PX / pxPerSec; // seconds
+    laneCooldown[lane] = DESIRED_GAP_PX / pxPerSec;
+
+    // Schedule next attempt
+    spawnTimer = baseInterval * (0.9 + Math.random() * 0.25);
   }
-
-  function spawnTick(dt){
-    // tick down lane cooldowns
-    for (let i=0;i<lanes;i++) laneCooldown[i] = Math.max(0, laneCooldown[i] - dt);
-
-    // global cadence scales with speed
-    const baseInterval = Math.max(0.65, 1.25 - speed/700);
-    spawnTimer -= dt;
-
-    if (spawnTimer <= 0){
-      const open = [];
-      for (let i=0;i<lanes;i++) if (laneCooldown[i] <= 0) open.push(i);
-
-      if (open.length > 0){
-        // spawn in 1 or 2 lanes (never all 3); bias to 1
-        let count = Math.random() < 0.65 ? 1 : 2;
-        count = Math.min(count, open.length, lanes - 1);
-
-        // avoid "wall" in window ahead of truck
-        const xWindowStart = TRUCK_X + 40;
-        const xWindowEnd   = TRUCK_X + WINDOW_AHEAD_PX;
-
-        shuffle(open);
-        const chosen = [];
-        for (const lane of open){
-          if (chosen.length >= count) break;
-
-          const tentative = [...chosen, lane];
-          let blocked = 0;
-          for (let L=0; L<lanes; L++){
-            const willSpawnHere = tentative.includes(L);
-            const alreadyBlocked = laneBlockedInWindow(L, xWindowStart, xWindowEnd);
-            if (willSpawnHere || alreadyBlocked) blocked++;
-          }
-          if (blocked <= 2) chosen.push(lane); // only if at least 1 lane remains open
-        }
-
-        // spawn and stagger
-        chosen.forEach((lane, idx) => {
-          spawnInLane(lane);
-          const obj = objs[objs.length-1];
-          obj.x += idx * STAGGER_PX;
-        });
-      }
-
-      // schedule next attempt
-      spawnTimer = baseInterval * (0.9 + Math.random() * 0.3);
-    }
-  }
-  // ---------------------------------------------------------------------
+  // -------------------------------------------------------------------------
 
   function rectOverlap(ax,ay,aw,ah, bx,by,bw,bh){
     return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
@@ -435,7 +449,10 @@
   function update(dt){
     if (!running || paused || over) return;
 
-    // Speed curve
+    // Timers
+    if (invulnMs > 0) invulnMs -= dt*1000;
+
+    // Speed
     speed += SPEED_GAIN*dt; if (speed > MAX_SPEED) speed = MAX_SPEED;
 
     // Score
@@ -445,7 +462,7 @@
     // Spawning
     spawnTick(dt);
 
-    // Move objects & resolve
+    // Move & collisions
     for (let i=objs.length-1;i>=0;i--){
       const o = objs[i];
       o.x += o.vx * dt;
@@ -455,21 +472,21 @@
         if (o.kind === 'obst'){ streak++; if (streak>maxStreak) maxStreak=streak; }
       }
 
-      // Forgiving truck hitbox
+      // Forgiving hitbox
       const tx = TRUCK_X + HITBOX_PAD, ty = truck.y + HITBOX_PAD;
       const tw = TRUCK.w - HITBOX_PAD*2, th = TRUCK.h - HITBOX_PAD*2;
 
-      if (rectOverlap(tx,ty,tw,th, o.x,o.y,o.w,o.h)){
+      if (invulnMs <= 0 && rectOverlap(tx,ty,tw,th, o.x,o.y,o.w,o.h)){
         if (o.kind === 'pick'){
-          // BOOST: speed bump + points + glow + floating text
+          // Boost: speed & points
           objs.splice(i,1);
           distance += 12;
-          speed = Math.min(speed + 60, MAX_SPEED);
+          speed = Math.min(speed + 50, MAX_SPEED);
           truckGlow = 260;
           floatTexts.push({text:"+Speed!", x: TRUCK_X + TRUCK.w/2, y: truck.y - 6, life: 900});
           continue;
         } else {
-          // OBSTACLE collision
+          // Obstacle hit
           objs.splice(i,1);
           lives--; streak = 0;
           shake(140); flash(110);
@@ -490,7 +507,7 @@
       if (o.x < -200) objs.splice(i,1);
     }
 
-    // Lane change (fast glide; set LANE_CHANGE_SPEED=99999 for snap)
+    // Fast glide lane change
     const targetY = laneYs[truck.targetLane] - TRUCK.h/2;
     const dy = targetY - truck.y;
     truck.y += Math.sign(dy) * Math.min(Math.abs(dy), LANE_CHANGE_SPEED * dt);
@@ -528,12 +545,12 @@
     // Draw objects
     for (const o of objs) drawObstacle(o);
 
-    // Draw truck
-    drawTruck10(TRUCK_X, truck.y, truckGlow > 0);
+    // Draw truck IMAGE (with glow if boosted)
+    drawTruckImage(TRUCK_X, truck.y, truckGlow > 0);
 
     // Floating texts
     c.save();
-    c.font = "bold 24px Inter, Arial";
+    c.font = "bold 22px Inter, Arial";
     c.textAlign = "center";
     for (const t of floatTexts){
       const alpha = Math.max(0, Math.min(1, t.life / 900));
@@ -559,7 +576,13 @@
   // Input
   function moveLane(delta){
     if (!running || over) return;
-    truck.targetLane = Math.max(0, Math.min(lanes-1, (truck.targetLane ?? 1) + delta));
+    const prev = truck.targetLane ?? 1;
+    const next = Math.max(0, Math.min(lanes-1, prev + delta));
+    if (next !== prev){
+      truck.targetLane = next;
+      // start grace window after lane change
+      invulnMs = INVULN_MS;
+    }
   }
 
   window.addEventListener('keydown', (e)=>{
@@ -589,4 +612,3 @@
 </script>
 </body>
 </html>
-
